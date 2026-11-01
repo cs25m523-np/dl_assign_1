@@ -494,6 +494,7 @@ epochs = 3
 activations = ["relu", "sigmoid", "tanh", "silu", "gelu"]
 activation_results = []
 
+#Iterating over above activation functions
 for activation in activations:
     print(f"\nTraining with activation: {activation}")
 
@@ -560,6 +561,7 @@ optimizer_names = [
 ]
 optimizer_results = []
 
+#Iterating over above optimizer types
 for optimizer_name in optimizer_names:
     print(f"\nTraining with optimizer: {optimizer_name}")
 
