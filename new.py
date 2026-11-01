@@ -33,12 +33,6 @@ import wandb
 
 wandb.login()
 
-from PIL import Image, ImageEnhance, ImageOps
-import random
-import numpy as np
-import torch
-
-
 class Cutout(object):
     """Randomly mask out one or more patches from an image.
     Args:
@@ -352,14 +346,14 @@ def get_activation(name):
         "tanh": nn.Tanh,
         "silu": nn.SiLU,
         "gelu": nn.GELU,
-    }
+     }
     return activations[name.lower()]()
 
 
 def make_layers(cfg, batch_norm=False, activation="relu"):
-    layers = []
-    in_channels = 3
-    for v in cfg:
+      layers = []
+      in_channels = 3
+      for v in cfg:
         if v == 'M':
             layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
         else:
@@ -369,16 +363,13 @@ def make_layers(cfg, batch_norm=False, activation="relu"):
             else:
                 layers += [conv2d, get_activation(activation)]
             in_channels = v
-    return nn.Sequential(*layers)
+      return nn.Sequential(*layers)
 
 def vgg(cfg, num_classes=10, batch_norm=True, activation="relu"):
-    return VGG(make_layers(cfg, batch_norm=batch_norm, activation=activation), num_classes=num_classes)
+      return VGG(make_layers(cfg, batch_norm=batch_norm, activation=activation), num_classes=num_classes)
 
 # VGG-6 configuration
 cfg_vgg6 = [64, 64, 'M', 128, 128, 'M']
-
-model = vgg(cfg_vgg6, num_classes=10, batch_norm=True, activation="gelu")
-print(model)
 
 def evaluate(model, loader):
     model.eval()
@@ -400,11 +391,7 @@ def evaluate(model, loader):
 
     return total_loss / total, 100.0 * correct / total
 
-train_loader,test_loader = GetCifar10(64)
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-model = vgg(cfg_vgg6, num_classes=10, batch_norm=True).to(device)
 
 def make_optimizer(name, model, lr):
     name = name.lower()
@@ -435,9 +422,7 @@ def make_optimizer(name, model, lr):
 
 criterion = nn.CrossEntropyLoss()
 lr = 0.001
-epochs = 100
-
-optimizer = make_optimizer("adam", model, lr)
+epochs = 3
 
 def train_model(model, epochs, optimizer, train_loader, val_loader):
     history = {
@@ -479,6 +464,15 @@ def train_model(model, epochs, optimizer, train_loader, val_loader):
         history["val_loss"].append(val_loss)
         history["val_accuracy"].append(val_accuracy)
 
+        # W&B stores these values by epoch, producing training/validation curves.
+        wandb.log({
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "train_accuracy": train_accuracy,
+            "val_loss": val_loss,
+            "val_accuracy": val_accuracy,
+        }, step=epoch + 1)
+
         print(
             f"Epoch {epoch + 1}/{epochs} "
             f"Train loss: {train_loss:.4f}, "
@@ -508,26 +502,59 @@ activation_results = []
 for activation in activations:
     print(f"\nTraining with activation: {activation}")
 
-    model = vgg(
-        cfg_vgg6,
-        num_classes=10,
-        batch_norm=True,
-        activation=activation
-    ).to(device)
+    with wandb.init(
+        project="vgg6-cifar10",
+        group="activation-comparison",
+        name=f"activation-{activation}",
+        config={
+            "activation": activation,
+            "optimizer": "adam",
+            "batch_size": 64,
+            "learning_rate": 0.001,
+            "epochs": epochs,
+        },
+    ) as run:
+        model = vgg(
+            cfg_vgg6,
+            num_classes=10,
+            batch_norm=True,
+            activation=activation
+        ).to(device)
 
-    optimizer = make_optimizer("adam", model, lr=0.001)
-    history = train_model(
-        model, epochs=3, optimizer=optimizer,
-        train_loader=train_loader, val_loader=val_loader
-    )
+        optimizer = make_optimizer("adam", model, lr=0.001)
+        history = train_model(
+            model, epochs=epochs, optimizer=optimizer,
+            train_loader=train_loader, val_loader=val_loader
+        )
 
-    test_loss, test_accuracy = evaluate(model, test_loader)
+        test_loss, test_accuracy = evaluate(model, test_loader)
+        best_val_accuracy = max(history["val_accuracy"])
 
-    activation_results.append({
-        "activation": activation,
-        "best_validation_accuracy": max(history["val_accuracy"]),
-        "test_accuracy": test_accuracy
-    })
+        # W&B scatter plot: validation accuracy for each epoch in this run.
+        scatter_table = wandb.Table(
+            data=[[epoch + 1, accuracy]
+                  for epoch, accuracy in enumerate(history["val_accuracy"])],
+            columns=["step", "validation_accuracy"],
+        )
+        wandb.log({
+            "validation_accuracy_vs_step": wandb.plot.scatter(
+                scatter_table,
+                "step",
+                "validation_accuracy",
+                title="Validation accuracy vs. step",
+            )
+        })
+
+        # Summary values are used by W&B run comparison plots.
+        run.summary["best_val_accuracy"] = best_val_accuracy
+        run.summary["test_accuracy"] = test_accuracy
+        run.summary["test_loss"] = test_loss
+
+        activation_results.append({
+            "activation": activation,
+            "best_validation_accuracy": best_val_accuracy,
+            "test_accuracy": test_accuracy
+        })
 
 for result in activation_results:
     print(result)
@@ -541,27 +568,57 @@ optimizer_results = []
 for optimizer_name in optimizer_names:
     print(f"\nTraining with optimizer: {optimizer_name}")
 
-    model = vgg(
-        cfg_vgg6,
-        num_classes=10,
-        batch_norm=True,
-        activation="relu"
-    ).to(device)
+    with wandb.init(
+        project="vgg6-cifar10",
+        group="optimizer-comparison",
+        name=f"optimizer-{optimizer_name}",
+        config={
+            "activation": "relu",
+            "optimizer": optimizer_name,
+            "batch_size": 64,
+            "learning_rate": 0.001,
+            "epochs": epochs,
+        },
+    ) as run:
+        model = vgg(
+            cfg_vgg6,
+            num_classes=10,
+            batch_norm=True,
+            activation="relu"
+        ).to(device)
 
-    optimizer = make_optimizer(optimizer_name, model, lr=0.001)
-    history = train_model(
-        model, epochs=3, optimizer=optimizer,
-        train_loader=train_loader, val_loader=val_loader
-    )
+        optimizer = make_optimizer(optimizer_name, model, lr=0.001)
+        history = train_model(
+            model, epochs=epochs, optimizer=optimizer,
+            train_loader=train_loader, val_loader=val_loader
+        )
 
-    test_loss, test_accuracy = evaluate(model, test_loader)
+        test_loss, test_accuracy = evaluate(model, test_loader)
+        best_val_accuracy = max(history["val_accuracy"])
 
-    optimizer_results.append({
-        "optimizer": optimizer_name,
-        "best_validation_accuracy": max(history["val_accuracy"]),
-        "test_accuracy": test_accuracy
-    })
+        scatter_table = wandb.Table(
+            data=[[epoch + 1, accuracy]
+                  for epoch, accuracy in enumerate(history["val_accuracy"])],
+            columns=["step", "validation_accuracy"],
+        )
+        wandb.log({
+            "validation_accuracy_vs_step": wandb.plot.scatter(
+                scatter_table,
+                "step",
+                "validation_accuracy",
+                title="Validation accuracy vs. step",
+            )
+        })
+
+        run.summary["best_val_accuracy"] = best_val_accuracy
+        run.summary["test_accuracy"] = test_accuracy
+        run.summary["test_loss"] = test_loss
+
+        optimizer_results.append({
+            "optimizer": optimizer_name,
+            "best_validation_accuracy": best_val_accuracy,
+            "test_accuracy": test_accuracy
+        })
 
 for result in optimizer_results:
     print(result)
-
