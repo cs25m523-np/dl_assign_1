@@ -1,5 +1,5 @@
-"""VGG6_CIFAR10.ipynb
-Original file is located at
+"""VGG6_CIFAR10.py
+Original colab file is located at:
     https://colab.research.google.com/drive/1ZEPX8Cr1jURuu8vA-g3QxPo0XX7egE1l
 """
 
